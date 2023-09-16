@@ -346,3 +346,29 @@ soccer1_6:
     - 0.1
     - network_args.models.allball.network_args.share_view
     - True
+soccer1_6_v_1:
+  comment: "[mvmp] Neuralbody + background in the wild"
+  data: config/neuralbody/dataset/demo_soccer1_6.yml
+  model: config/neuralbody/network/comp_neuralbody+back+soccer.yml
+  base: config/neuralbody/utils/train_base.yml
+  trainer: config/neuralbody/utils/trainer_soccer.yml
+  visualizer: config/neuralbody/utils/vis_multi.yml
+  opts_dict:
+    data_share_args:
+      sample_args:
+        nrays: 6144
+      ranges: [0, 200, 1]
+      subs: ['1']
+  opts:
+    - data_share_args.object_args.allhuman.pids
+    - [0, 1, 2, 3, 4, 5]
+    - network_args.models.allball.network_args.traj.ranges
+    - [0, 200, 1]
+    - network_args.models.allball.network_args.traj.path
+    - ${data}/output-object3d/keypoints3d
+    - network_args.models.allhuman.pids
+    - [0, 1, 2, 3, 4, 5]
+    - trainer_args.loss.reg.weight
+    - 0.1
+    - network_args.models.allball.network_args.share_view
+    - True

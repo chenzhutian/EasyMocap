@@ -25,7 +25,8 @@ class plwrapper(pl.LightningModule):
         if mode == 'train' or mode == 'trainvis':
             self.train_dataset = load_object(cfg.data_train_module, cfg.data_train_args)
         # self.val_dataset = load_object(cfg.data_val_module, cfg.data_val_args)
-        else:
+
+        if mode != 'train':
             if mode + '_renderer_module' in cfg.keys():
                 module, args = cfg[mode+'_renderer_module'], cfg[mode+'_renderer_args']
             else:

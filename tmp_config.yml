@@ -1,0 +1,1 @@
+parents: ['config/render/result_smpl.yml', 'config/render/input_mv.yml', 'config/render/output_image.yml', 'config/render/video.yml']

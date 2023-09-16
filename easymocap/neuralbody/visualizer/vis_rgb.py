@@ -167,6 +167,7 @@ class Visualizer:
             key_index_offset = keys.index('human_0') + 1
         else:
             key_index_offset = 2
+        
         for key in ['instance_map']:
             if key not in self.keys:continue
             if key not in output.keys():continue
@@ -203,6 +204,7 @@ class Visualizer:
                 res[coord[empty, 0], coord[empty, 1]] = colors[0]
                 pred = (res * 255).astype(np.uint8)
                 outputs[name] = pred
+        
         for key in ['semantic_map']:
             if key not in self.keys:continue
             if key not in output.keys():continue

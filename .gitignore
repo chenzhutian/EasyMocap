@@ -116,3 +116,6 @@ code
 lightning_logs
 models
 yolov5m.pt
+neuralbody
+# sbatch
+logs/
