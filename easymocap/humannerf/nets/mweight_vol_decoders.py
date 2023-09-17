@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.utils.network_util import ConvDecoder3D
+from ..utils.network_util import ConvDecoder3D
 
 
 class MotionWeightVolumeDecoder(nn.Module):

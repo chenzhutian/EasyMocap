@@ -1,11 +1,12 @@
 import torch.nn as nn
 
-from core.utils.network_util import initseq, RodriguesModule
+from ..utils.network_util import initseq, RodriguesModule
 
-from configs import cfg
+# from configs import cfg
 
 class BodyPoseRefiner(nn.Module):
     def __init__(self,
+                 total_bones=24,
                  embedding_size=69,
                  mlp_width=256,
                  mlp_depth=4,
@@ -17,7 +18,7 @@ class BodyPoseRefiner(nn.Module):
         for _ in range(0, mlp_depth-1):
             block_mlps += [nn.Linear(mlp_width, mlp_width), nn.ReLU()]
 
-        self.total_bones = cfg.total_bones - 1
+        self.total_bones = total_bones - 1
         block_mlps += [nn.Linear(mlp_width, 3 * self.total_bones)]
 
         self.block_mlps = nn.Sequential(*block_mlps)

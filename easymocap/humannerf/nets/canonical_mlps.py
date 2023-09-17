@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from core.utils.network_util import initseq
+from ..utils.network_util import initseq
 
 
 class CanonicalMLP(nn.Module):

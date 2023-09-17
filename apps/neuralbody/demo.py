@@ -8,6 +8,7 @@ from copy import deepcopy
 def reload_config(config, data, outdir):
     # generate config file
     os.makedirs(outdir, exist_ok=True)
+    
     _cfg = CN()
     if 'exp' in config.keys():
         config_ = config_dict[config.pop('exp')]
@@ -17,17 +18,20 @@ def reload_config(config, data, outdir):
                 config_[key] = config[key]
         config = config_
         config.opts = opts
+    
     _cfg['parents'] = []
     for key in ['base', 'data', 'model', 'trainer', 'visualizer']:
         _cfg['parents'].append(config[key])
     tmp_name = join(outdir, '_config.yml')
     print(_cfg, file=open(tmp_name, 'w'))
+
     opts_cfg = config.get('opts', [])
     opts_cfg_dict = config.get('opts_dict', CN({}))
     if len(data)>0:
         for i in range(len(opts_cfg)):
             if isinstance(opts_cfg[i], str) and r'${data}' in opts_cfg[i]:
                 opts_cfg[i] = opts_cfg[i].replace(r'${data}', data)
+
     config = Config.load(tmp_name, opts=opts_cfg)
     config.merge_from_other_cfg(opts_cfg_dict)
     config.merge_from_list(args.opts)
@@ -49,8 +53,10 @@ def neuralbody_train(data, config, mode, exp=None):
     outdir = join(args.out, exp)
     cfg_name = join(outdir, 'config.yml')
     cmd =  f'python3 apps/neuralbody/train_pl.py --cfg {cfg_name} gpus {args.gpus} distributed True exp {exp}'
+
     if args.recfg or (not args.test and not args.demo and not args.eval):
         reload_config(config, data, outdir)
+
     if args.eval or args.demo or args.test or args.trainvis or args.canonical or args.poses is not None:
         if args.test:
             cmd += ' split test'
@@ -123,4 +129,5 @@ if __name__ == '__main__':
     if len(args.path) == 1:
         args.path = args.path[0]
 
+    print('config==>', config)
     neuralbody_train(args.path, config, mode=args.mode, exp=args.exp)

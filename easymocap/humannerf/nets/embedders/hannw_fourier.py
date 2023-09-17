@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from configs import cfg
+# from configs import cfg
 
 class Embedder:
     def __init__(self, **kwargs):
@@ -24,10 +24,10 @@ class Embedder:
         freq_bands = 2.**torch.linspace(0., max_freq, steps=N_freqs)
             
         # get hann window weights
-        kick_in_iter = torch.tensor(cfg.non_rigid_motion_mlp.kick_in_iter,
+        kick_in_iter = torch.tensor(self.kwargs['kick_in_iter'],
                                     dtype=torch.float32)
         t = torch.clamp(self.kwargs['iter_val'] - kick_in_iter, min=0.)
-        N = cfg.non_rigid_motion_mlp.full_band_iter - kick_in_iter
+        N = self.kwargs['full_band_iter'] - kick_in_iter
         m = N_freqs
         alpha = m * t / N
 
@@ -45,7 +45,7 @@ class Embedder:
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
 
 
-def get_embedder(multires, iter_val, is_identity=0):
+def get_embedder(multires, iter_val, kick_in_iter, full_band_iter, is_identity=0):
     if is_identity == -1:
         return nn.Identity(), 3
     
@@ -55,7 +55,9 @@ def get_embedder(multires, iter_val, is_identity=0):
                 'max_freq_log2' : multires-1,
                 'num_freqs' : multires,
                 'periodic_fns' : [torch.sin, torch.cos],
-                'iter_val': iter_val
+                'iter_val': iter_val,
+                'kick_in_iter': kick_in_iter,
+                'full_band_iter': full_band_iter
     }
     
     embedder_obj = Embedder(**embed_kwargs)

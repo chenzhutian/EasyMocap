@@ -2,86 +2,116 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.utils.network_util import MotionBasisComputer
-from core.nets.human_nerf.component_factory import \
-    load_positional_embedder, \
-    load_canonical_mlp, \
-    load_mweight_vol_decoder, \
-    load_pose_decoder, \
-    load_non_rigid_motion_mlp
+from ..utils.network_util import MotionBasisComputer
+from .mweight_vol_decoders import MotionWeightVolumeDecoder
+from .pose_decoders import BodyPoseRefiner
+from .non_rigid_motion_mlps import NonRigidMotionMLP
+from .canonical_mlps import CanonicalMLP
+from .embedders.hannw_fourier import get_embedder as get_non_rigid_embedder
+from .embedders.fourier import get_embedder
 
-from configs import cfg
+# from configs import cfg
 
+total_bones = 24
+N_samples = 128      # number of samples for each ray in coarse ray matching
 
 class Network(nn.Module):
-    def __init__(self):
+    def __init__(self,
+        mweight_volume, # args
+        non_rigid_motion_mlp, # args
+        canonical_mlp, # args
+        pose_decoder, # args
+        nerf, # args
+    ):
         super(Network, self).__init__()
 
+        print("------------------ GPU Configurations ------------------")
+        self.gpu_args = {}
+        n_gpus = torch.cuda.device_count()
+        self.gpu_args['n_gpus'] = n_gpus
+        if n_gpus > 0:
+            all_gpus = list(range(n_gpus))
+            self.gpu_args['primary_gpus'] = [0]
+            if n_gpus > 1:
+                self.gpu_args['secondary_gpus'] = [g for g in all_gpus \
+                                        if g not in self.gpu_args['primary_gpus']]
+            else:
+                self.gpu_args['secondary_gpus'] = self.gpu_args['primary_gpus']
+
+        print(f"Primary GPUs: {self.gpu_args['primary_gpus']}")
+        print(f"Secondary GPUs: {self.gpu_args['secondary_gpus']}")
+        print("--------------------------------------------------------")
+
+        self.nerf_args = nerf
+
         # motion basis computer
-        self.motion_basis_computer = MotionBasisComputer(
-                                        total_bones=cfg.total_bones)
+        self.motion_basis_computer = MotionBasisComputer(total_bones=total_bones)
 
         # motion weight volume
-        self.mweight_vol_decoder = load_mweight_vol_decoder(cfg.mweight_volume.module)(
-            embedding_size=cfg.mweight_volume.embedding_size,
-            volume_size=cfg.mweight_volume.volume_size,
-            total_bones=cfg.total_bones
+        self.mweight_vol_decoder = MotionWeightVolumeDecoder(
+            embedding_size=mweight_volume['embedding_size'],
+            volume_size=mweight_volume['volume_size'],
+            total_bones=total_bones
         )
 
         # non-rigid motion st positional encoding
-        self.get_non_rigid_embedder = \
-            load_positional_embedder(cfg.non_rigid_embedder.module)
+        self.get_non_rigid_embedder = get_non_rigid_embedder
 
         # non-rigid motion MLP
         _, non_rigid_pos_embed_size = \
-            self.get_non_rigid_embedder(cfg.non_rigid_motion_mlp.multires, 
-                                        cfg.non_rigid_motion_mlp.i_embed)
-        self.non_rigid_mlp = \
-            load_non_rigid_motion_mlp(cfg.non_rigid_motion_mlp.module)(
+            self.get_non_rigid_embedder(non_rigid_motion_mlp['multires'], 
+                                        non_rigid_motion_mlp['i_embed'],
+                                        non_rigid_motion_mlp['kick_in_iter'],
+                                        non_rigid_motion_mlp['full_band_iter']
+                                        )
+
+        self.non_rigid_mlp = NonRigidMotionMLP(
                 pos_embed_size=non_rigid_pos_embed_size,
-                condition_code_size=cfg.non_rigid_motion_mlp.condition_code_size,
-                mlp_width=cfg.non_rigid_motion_mlp.mlp_width,
-                mlp_depth=cfg.non_rigid_motion_mlp.mlp_depth,
-                skips=cfg.non_rigid_motion_mlp.skips)
+                condition_code_size=non_rigid_motion_mlp['condition_code_size'],
+                mlp_width=non_rigid_motion_mlp['mlp_width'],
+                mlp_depth=non_rigid_motion_mlp['mlp_depth'],
+                skips=non_rigid_motion_mlp['skips'])
+
+        self.non_rigid_motion_mlp_args = non_rigid_motion_mlp
+
         self.non_rigid_mlp = \
             nn.DataParallel(
                 self.non_rigid_mlp,
-                device_ids=cfg.secondary_gpus,
-                output_device=cfg.secondary_gpus[0])
+                device_ids=self.gpu_args['secondary_gpus'],
+                output_device=self.gpu_args['secondary_gpus'][0])
 
         # canonical positional encoding
-        get_embedder = load_positional_embedder(cfg.embedder.module)
         cnl_pos_embed_fn, cnl_pos_embed_size = \
-            get_embedder(cfg.canonical_mlp.multires, 
-                         cfg.canonical_mlp.i_embed)
+            get_embedder(canonical_mlp['multires'], 
+                         canonical_mlp['i_embed'])
         self.pos_embed_fn = cnl_pos_embed_fn
 
         # canonical mlp 
         skips = [4]
-        self.cnl_mlp = \
-            load_canonical_mlp(cfg.canonical_mlp.module)(
+        self.cnl_mlp = CanonicalMLP(
                 input_ch=cnl_pos_embed_size, 
-                mlp_depth=cfg.canonical_mlp.mlp_depth, 
-                mlp_width=cfg.canonical_mlp.mlp_width,
+                mlp_depth=canonical_mlp['mlp_depth'], 
+                mlp_width=canonical_mlp['mlp_width'],
                 skips=skips)
+
         self.cnl_mlp = \
             nn.DataParallel(
                 self.cnl_mlp,
-                device_ids=cfg.secondary_gpus,
-                output_device=cfg.primary_gpus[0])
+                device_ids=self.gpu_args['secondary_gpus'],
+                output_device=self.gpu_args['primary_gpus'][0])
 
         # pose decoder MLP
-        self.pose_decoder = \
-            load_pose_decoder(cfg.pose_decoder.module)(
-                embedding_size=cfg.pose_decoder.embedding_size,
-                mlp_width=cfg.pose_decoder.mlp_width,
-                mlp_depth=cfg.pose_decoder.mlp_depth)
-    
+        self.pose_decoder = BodyPoseRefiner(
+                total_bones,
+                embedding_size=pose_decoder['embedding_size'],
+                mlp_width=pose_decoder['mlp_width'],
+                mlp_depth=pose_decoder['mlp_depth'])
+        self.pose_decoder_args = pose_decoder
 
     def deploy_mlps_to_secondary_gpus(self):
-        self.cnl_mlp = self.cnl_mlp.to(cfg.secondary_gpus[0])
+        self.cnl_mlp = self.cnl_mlp.to(self.gpu_args['secondary_gpus'][0])
         if self.non_rigid_mlp:
-            self.non_rigid_mlp = self.non_rigid_mlp.to(cfg.secondary_gpus[0])
+            self.non_rigid_mlp = self.non_rigid_mlp.to(self.gpu_args['secondary_gpus'][0])
 
         return self
 
@@ -95,7 +125,7 @@ class Network(nn.Module):
 
         # (N_rays, N_samples, 3) --> (N_rays x N_samples, 3)
         pos_flat = torch.reshape(pos_xyz, [-1, pos_xyz.shape[-1]])
-        chunk = cfg.netchunk_per_gpu*len(cfg.secondary_gpus)
+        chunk = self.nerf_args['netchunk_per_gpu']*len(self.gpu_args['secondary_gpus'])
 
         result = self._apply_mlp_kernals(
                         pos_flat=pos_flat,
@@ -154,15 +184,16 @@ class Network(nn.Module):
                         pos_embed=xyz_embedded)]
 
         output = {}
-        output['raws'] = torch.cat(raws, dim=0).to(cfg.primary_gpus[0])
+        output['raws'] = torch.cat(raws, dim=0).to(self.gpu_args['primary_gpus'][0])
 
         return output
 
 
     def _batchify_rays(self, rays_flat, **kwargs):
         all_ret = {}
-        for i in range(0, rays_flat.shape[0], cfg.chunk):
-            ret = self._render_rays(rays_flat[i:i+cfg.chunk], **kwargs)
+        chunk = self.nerf_args['chunk']
+        for i in range(0, rays_flat.shape[0], chunk):
+            ret = self._render_rays(rays_flat[i:i+chunk], **kwargs)
             for k in ret:
                 if k not in all_ret:
                     all_ret[k] = []
@@ -265,9 +296,9 @@ class Network(nn.Module):
 
     @staticmethod
     def _get_samples_along_ray(N_rays, near, far):
-        t_vals = torch.linspace(0., 1., steps=cfg.N_samples).to(near)
+        t_vals = torch.linspace(0., 1., steps=N_samples).to(near)
         z_vals = near * (1.-t_vals) + far * (t_vals)
-        return z_vals.expand([N_rays, cfg.N_samples]) 
+        return z_vals.expand([N_rays, N_samples]) 
 
 
     @staticmethod
@@ -300,7 +331,7 @@ class Network(nn.Module):
         rays_o, rays_d, near, far = self._unpack_ray_batch(ray_batch)
 
         z_vals = self._get_samples_along_ray(N_rays, near, far)
-        if cfg.perturb > 0.:
+        if self.nerf_args['perturb'] > 0.:
             z_vals = self._stratified_sampling(z_vals)
 
         pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None]
@@ -340,9 +371,9 @@ class Network(nn.Module):
 
     @staticmethod
     def _multiply_corrected_Rs(Rs, correct_Rs):
-        total_bones = cfg.total_bones - 1
+        tmp_total_bones = total_bones - 1
         return torch.matmul(Rs.reshape(-1, 3, 3),
-                            correct_Rs.reshape(-1, 3, 3)).reshape(-1, total_bones, 3, 3)
+                            correct_Rs.reshape(-1, 3, 3)).reshape(-1, tmp_total_bones, 3, 3)
 
     
     def forward(self,
@@ -361,7 +392,7 @@ class Network(nn.Module):
         motion_weights_priors=motion_weights_priors[None, ...]
 
         # correct body pose
-        if iter_val >= cfg.pose_decoder.get('kick_in_iter', 0):
+        if iter_val >= self.pose_decoder_args.get('kick_in_iter', 0):
             pose_out = self.pose_decoder(dst_posevec)
             refined_Rs = pose_out['Rs']
             refined_Ts = pose_out.get('Ts', None)
@@ -378,11 +409,11 @@ class Network(nn.Module):
 
         non_rigid_pos_embed_fn, _ = \
             self.get_non_rigid_embedder(
-                multires=cfg.non_rigid_motion_mlp.multires,                         
-                is_identity=cfg.non_rigid_motion_mlp.i_embed,
+                multires=self.non_rigid_motion_mlp_args['multires'],                         
+                is_identity=self.non_rigid_motion_mlp_args['i_embed'],
                 iter_val=iter_val,)
 
-        if iter_val < cfg.non_rigid_motion_mlp.kick_in_iter:
+        if iter_val < self.non_rigid_motion_mlp_args['kick_in_iter']:
             # mask-out non_rigid_mlp_input 
             non_rigid_mlp_input = torch.zeros_like(dst_posevec) * dst_posevec
         else:
